@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.IO;
 using System.CodeDom;
+using System.Security.Cryptography.X509Certificates;
 
 namespace PresetConverter
 {
@@ -65,8 +66,32 @@ namespace PresetConverter
 			}
 		}
 
+		public void SaveFile()
+		{
+			if (filePath == null)
+			{
+				throw new InvalidOperationException();
+			}
+			SaveFile(filePath);
+		}
 		public void SaveFile(string path)
 		{
+			var text = new StringBuilder();
+
+			foreach (var section in sections)
+			{
+				if (!string.IsNullOrEmpty(section.Key))
+				{
+					text.AppendLine("[" + section.Key + "]");
+				}
+				foreach (var pair in section.Value)
+				{
+					text.AppendLine(pair.Key + "=" + string.Join(",", pair.Value));
+				}
+				text.AppendLine();
+			}
+			text.AppendLine();
+			File.WriteAllText(path, text.ToString(), Encoding.UTF8);
 		}
 
 		public bool HasValue(string section)
@@ -136,5 +161,18 @@ namespace PresetConverter
 		{
 			return sections.Select(x => x.Key).ToArray();
 		}
+	}
+
+	public class GShadeFlairMap
+	{
+        string[] flair = { };
+		
+
+        GShadeFlairMap(IniFile gs_preset)
+		{
+			gs_preset.GetValue("", "flairs", out string[] flairs);
+			flairs.Prepend("");
+		}
+
 	}
 }

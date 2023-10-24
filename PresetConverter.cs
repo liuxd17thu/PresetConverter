@@ -6,10 +6,11 @@ using System.Threading.Tasks;
 
 namespace PresetConverter
 {
-    internal class PresetConverter
-    {
-        static void Main(string[] args)
-        {
-        }
-    }
+	internal class PresetConverter
+	{
+		static void Main(string[] args)
+		{
+
+		}
+	}
 }
