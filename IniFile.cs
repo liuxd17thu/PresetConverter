@@ -161,12 +161,38 @@ namespace PresetConverter
 		{
 			return sections.Select(x => x.Key).ToArray();
 		}
+
+		public void SetSection(string section, SortedDictionary<string, string[]> sectionData)
+		{
+			if (!sections.ContainsKey(section))
+            {
+                sections.Add(section, sectionData);
+            }
+            else
+			{
+				sections[section] = sectionData;
+			}
+		}
+		public void RemoveSection(string section)
+		{
+			if (sections.ContainsKey(section))
+			{
+				sections.Remove(section);
+			}
+		}
+		public void RenameSection(string section, string newSection)
+		{
+			if (sections.TryGetValue(section, out var sectionData))
+			{
+				SetSection(newSection, sectionData);
+				RemoveSection(section);
+            }
+		}
 	}
 
 	public class GShadeFlairMap
 	{
         string[] flair = { };
-		
 
         GShadeFlairMap(IniFile gs_preset)
 		{
