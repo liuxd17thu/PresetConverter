@@ -173,7 +173,18 @@ namespace PresetConverter
 				sections[section] = sectionData;
 			}
 		}
-		public void RemoveSection(string section)
+        public void GetSection(string section, out SortedDictionary<string, string[]> sectionData)
+        {
+            if (HasValue(section))
+            {
+                sectionData = sections[section];
+            }
+            else
+            {
+                sectionData = null;
+            }
+        }
+        public void RemoveSection(string section)
 		{
 			if (sections.ContainsKey(section))
 			{
@@ -190,14 +201,64 @@ namespace PresetConverter
 		}
 	}
 
-	public class GShadeFlairMap
+	public class FlairMap
 	{
-        string[] flair = { };
+        string[] flairs = { };
+		string[] techniques = { };
+		IniFile gshade_preset;
 
-        GShadeFlairMap(IniFile gs_preset)
+        FlairMap(IniFile gs_preset)
 		{
-			gs_preset.GetValue("", "flairs", out string[] flairs);
-			flairs.Prepend("");
+			gshade_preset = gs_preset;
+			gshade_preset.GetValue("", "Flairs", out flairs);
+			gshade_preset.GetValue("", "Techniques", out techniques);
+		}
+
+		public IniFile buildFlairPreset(string inFlair)
+		{
+			IniFile preset = null;
+			foreach (var technique in techniques)
+			{
+				var techSection = technique + "|" + inFlair;
+				if (gshade_preset.HasValue(techSection))
+				{
+					gshade_preset.GetSection(techSection, out var sectionData);
+					preset.SetSection(technique, sectionData);
+				}
+				else if (gshade_preset.HasValue(technique))
+				{
+
+				}
+				else
+				{
+					var flag = false;
+					foreach (var flair in flairs)
+					{
+						techSection = technique + "|" + flair;
+						if (gshade_preset.HasValue(techSection))
+						{
+
+							flag = true;
+							break;
+						}
+					}
+					if (!flag)
+					{
+
+					}
+				}
+			}
+			return preset;
+		}
+
+		string GetTechniqueFileName(string techniqueSignature)
+		{
+			var index = techniqueSignature.IndexOf('@');
+			if (index > 0 && index != techniqueSignature.Length - 1)
+			{
+				return techniqueSignature.Substring(index + 1);
+			}
+			return techniqueSignature;
 		}
 
 	}
