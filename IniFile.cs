@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.IO;
 using System.CodeDom;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Policy;
 
 namespace PresetConverter
 {
@@ -201,54 +202,80 @@ namespace PresetConverter
 		}
 	}
 
-	public class FlairMap
+	public class GShadePreset
 	{
-        string[] flairs = { };
-		string[] techniques = { };
-		IniFile gshade_preset;
+        string[] flairs;
+		string[] techniques;
+		readonly IniFile gshade_preset;
+		IniFile[] reshade_presets;
 
-        FlairMap(IniFile gs_preset)
+		public string srcVersion { get; set; } = "gs@403";
+		public string dstVersion { get; set; } = "re@580";
+		public bool shouldCleanSorting { get; set; } = false;
+		public bool shouldMovePreprocessors { get; set; } = false;
+
+        GShadePreset(IniFile gs_preset)
 		{
 			gshade_preset = gs_preset;
 			gshade_preset.GetValue("", "Flairs", out flairs);
 			gshade_preset.GetValue("", "Techniques", out techniques);
 		}
 
-		public IniFile buildFlairPreset(string inFlair)
+        /// <summary>
+        /// 根据GShade预设及变体名解析相应变体的独立版预设。
+        /// </summary>
+        /// <param name="inFlair">变体名，空字符串对应解析本体。</param>
+        /// <returns></returns>
+        public IniFile ExtractFlair(string inFlair)
 		{
 			IniFile preset = null;
+			gshade_preset.GetSection("", out var headSectionData);
+			preset.SetSection("", headSectionData);
 			foreach (var technique in techniques)
 			{
-				var techSection = technique + "|" + inFlair;
-				if (gshade_preset.HasValue(techSection))
+				var techFlair = inFlair.Length > 0 ? (GetTechniqueFileName(technique) + "|" + inFlair) : GetTechniqueFileName(technique);
+				SortedDictionary<string, string[]> sectionData;
+				if (gshade_preset.HasValue(techFlair)) // 找到变体
 				{
-					gshade_preset.GetSection(techSection, out var sectionData);
+					gshade_preset.GetSection(techFlair, out sectionData);
 					preset.SetSection(technique, sectionData);
 				}
-				else if (gshade_preset.HasValue(technique))
+				else if (gshade_preset.HasValue(technique)) // 没找到同名变体但有本体，使用本体
 				{
-
+					gshade_preset.GetSection(technique, out sectionData);
+					preset.SetSection(technique, sectionData);
 				}
 				else
 				{
 					var flag = false;
-					foreach (var flair in flairs)
-					{
-						techSection = technique + "|" + flair;
-						if (gshade_preset.HasValue(techSection))
+					foreach (var flair in flairs) // 没找到同名变体也没找到本体，随便抓一个
+                    {
+						techFlair = technique + "|" + flair;
+						if (gshade_preset.HasValue(techFlair))
 						{
-
-							flag = true;
+                            gshade_preset.GetSection(techFlair, out sectionData);
+                            preset.SetSection(technique, sectionData);
+                            flag = true; // 找到了
 							break;
 						}
 					}
-					if (!flag)
+					if (!flag) // 还是没找到，使用空白表
 					{
-
+						//preset.SetSection(technique, null);
 					}
 				}
 			}
 			return preset;
+		}
+
+		public void CleanSorting(IniFile preset)
+		{
+			preset.RemoveValue("", "TechniqueSorting");
+		}
+
+		public void MovePreprocessors(IniFile preset)
+		{
+
 		}
 
 		string GetTechniqueFileName(string techniqueSignature)
@@ -260,6 +287,11 @@ namespace PresetConverter
 			}
 			return techniqueSignature;
 		}
+
+	}
+
+	public class ReversePreprocessor
+	{
 
 	}
 }
