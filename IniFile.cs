@@ -7,6 +7,10 @@ using System.IO;
 using System.CodeDom;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Policy;
+using System.Collections.ObjectModel;
+using System.Collections;
+using System.Runtime.InteropServices;
+using System.Net.Http.Headers;
 
 namespace PresetConverter
 {
@@ -209,11 +213,6 @@ namespace PresetConverter
 		readonly IniFile gshade_preset;
 		IniFile[] reshade_presets;
 
-		public string srcVersion { get; set; } = "gs@403";
-		public string dstVersion { get; set; } = "re@580";
-		public bool shouldCleanSorting { get; set; } = false;
-		public bool shouldMovePreprocessors { get; set; } = false;
-
         GShadePreset(IniFile gs_preset)
 		{
 			gshade_preset = gs_preset;
@@ -264,18 +263,73 @@ namespace PresetConverter
 						//preset.SetSection(technique, null);
 					}
 				}
-			}
+                // 高版本GS -> 高版本RE，迁移预处理器
+                if (gshade_preset.GetValue(technique, "PreprocessorDefinitions", out var pp))
+                {
+                    preset.SetValue(technique, "PreprocessorDefinitions", pp);
+                }
+            }
 			return preset;
 		}
 
+		/// <summary>
+		/// 清除TechniqueSorting区段。
+		/// </summary>
+		/// <param name="preset">输入预设。</param>
 		public void CleanSorting(IniFile preset)
 		{
 			preset.RemoveValue("", "TechniqueSorting");
 		}
 
-		public void MovePreprocessors(IniFile preset)
+		/// <summary>
+		/// 移动预处理器定义至相应区段。
+		/// </summary>
+		/// <param name="preset">输入预设文件，原位操作。</param>
+		/// <param name="ppList">预处理器表以及对应的反查表。</param>
+		public void MovePreprocessors(ref IniFile preset, in PreprocessorList ppList)
 		{
+			// 具有自己section的着色器列表（可能多于Technique键值）
+			var effects = preset.GetSections().Where(x => x != "").ToArray();
+			// 预设预处理器列表
+			preset.GetValue("", "PreprocessorDefinitions", out var tmp);
+			var preset_pp = new SortedDictionary<string, string>(
+				tmp.Select(x =>
+				{	// 获取PreprocessorDefinition中所有的预处理器定义。
+					return x.Split(new char[] { '=' }, 2, StringSplitOptions.None);
+				}).Where(
+					x => x.Length == 2
+				).ToDictionary(x => x[0], x => x[1])
+			);
 
+            foreach (var effect in effects)
+			{
+				if (!ppList.forwardList.ContainsKey(effect))
+					continue;
+				preset.GetValue(effect, "PreprocessorDefinitions", out tmp);
+
+				var section_pp = new SortedDictionary<string, string>(
+					tmp.Select(x =>
+					{	// 获取PreprocessorDefinition中所有的预处理器定义。
+						return x.Split(new char[] { '=' }, 2, StringSplitOptions.None);
+					}).Where(
+						x => x.Length == 2
+					).ToDictionary(x => x[0], x => x[1])
+				);
+
+                foreach (var pp in ppList.forwardList[effect])
+				{
+					if (preset_pp.ContainsKey(pp) && !section_pp.ContainsKey(pp))
+					{
+						section_pp[pp] = preset_pp[pp];
+						preset_pp.Remove(pp);
+					}
+				}
+				preset.SetValue(effect, "PreprocessorDefinitions", section_pp.Select(x => x.Key + "=" + x.Value).ToArray());
+			}
+			if (preset_pp.Count > 0)
+			{
+				
+			}
 		}
 
 		string GetTechniqueFileName(string techniqueSignature)
@@ -290,8 +344,23 @@ namespace PresetConverter
 
 	}
 
-	public class ReversePreprocessor
+	public class PreprocessorList
 	{
+		public Dictionary<string, HashSet<string>> forwardList = new Dictionary<string, HashSet<string>> { };
+		public Dictionary<string, HashSet<string>> reverseList = new Dictionary<string, HashSet<string>> { };
 
-	}
+        public PreprocessorList(IniFile preprocessorList)
+		{
+			preprocessorList.GetSection("", out var effectPrepPair);
+			foreach (var pair in effectPrepPair)
+			{
+                // Value: 宏 Key: 着色器
+                forwardList.Add(pair.Key, new HashSet<string>(pair.Value));
+				foreach (var prep in pair.Value)
+				{
+					reverseList[prep].Add(pair.Key);
+				}
+			}
+		}
+    }
 }
