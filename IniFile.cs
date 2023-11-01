@@ -24,7 +24,7 @@ namespace PresetConverter
 		SortedDictionary<string, SortedDictionary<string, string[]>> sections =
 			new SortedDictionary<string, SortedDictionary<string, string[]>>();
 
-		public IniFile(string path) : this(File.Exists(path) ? new FileStream(path, FileMode.Open) : null)
+		public IniFile(string path, bool isEmpty = false) : this(File.Exists(path) && !isEmpty ? new FileStream(path, FileMode.Open) : null)
 		{
 			filePath = path;
 		}
@@ -217,7 +217,7 @@ namespace PresetConverter
 	{
         public string[] flairs;
 		public string[] techniques;
-		public HashSet<string> techniqueFiles;
+		public SortedSet<string> techniqueFiles;
 		public readonly IniFile gshade_preset;
 		public SortedDictionary<string, IniFile> reshade_presets = new SortedDictionary<string, IniFile>();
 
@@ -226,7 +226,7 @@ namespace PresetConverter
 			gshade_preset = gs_preset;
 			gshade_preset.GetValue("", "Flairs", out flairs);
 			gshade_preset.GetValue("", "Techniques", out techniques);
-			techniqueFiles = techniques.Select(x => GetTechniqueFileName(x)).ToHashSet();
+			techniqueFiles = new SortedSet<string>(techniques.Select(x => GetTechniqueFileName(x)).ToHashSet());
 		}
 
         /// <summary>
@@ -237,7 +237,7 @@ namespace PresetConverter
         /// <returns>拆分后的预设文件。</returns>
         public void ExtractFlair(string inFlair)
 		{
-			var preset = new IniFile(Path.Combine(".\\output", Path.GetFileNameWithoutExtension(gshade_preset.filePath) + (inFlair == "" ? "" : " - ") + inFlair + ".ini"));
+			var preset = new IniFile(Path.Combine(Path.GetFileNameWithoutExtension(gshade_preset.filePath) + (inFlair == "" ? "" : " - ") + inFlair + ".ini"), true);
             Console.WriteLine($"INFO|提取预设模板：{preset.GetIniFileName()}");
 
             gshade_preset.GetSection("", out var headSectionData);
@@ -299,13 +299,13 @@ namespace PresetConverter
         /// </summary>
         /// <param name="preset">输入预设文件，原位操作。</param>
         /// <param name="ppList">预处理器表以及对应的反查表。</param>
-        public void MovePreprocessors(ref IniFile preset, in PreprocessorList ppList)
+        public void MovePreprocessors(IniFile preset, in PreprocessorList ppList)
 		{
 			// 具有自己section的着色器列表（可能多于Technique键值）
 			var effects = preset.GetSections().Where(x => x != "").ToArray();
 
             // 获取所有的预处理器定义。
-            Func<string [], Dictionary<string, string>> buildPair = delegate (string[] list)
+            Func<string[], Dictionary<string, string>> buildPair = delegate (string[] list)
 			{
 				return list.Select(x =>
 				{   
@@ -325,7 +325,7 @@ namespace PresetConverter
 
 				// effect section的预处理器定义
 				preset.GetValue(effect, "PreprocessorDefinitions", out tmp);
-				var section_pp = new SortedDictionary<string, string>(buildPair(tmp));
+				var section_pp = tmp != null ? new SortedDictionary<string, string>(buildPair(tmp)) : new SortedDictionary<string, string>() { };
 
                 foreach (var pp in ppList.forwardList[effect])
 				{
@@ -343,11 +343,12 @@ namespace PresetConverter
 				{
                     Console.WriteLine($"WARN|{preset.GetIniFileName()}似乎未使用的预处理器定义：{pp.Key + "=" + pp.Value}");
                 }
-				Console.WriteLine("WARN|以上可能真的没有使用，也可能是本转换器的统计出现了遗漏，如真的是遗漏请向路障MKXX反馈");
-				preset.SetValue("", "PreprocessorDefinitions", preset_pp.Select(x => x.Key + "=" + x.Value).ToArray());
+
+				if(preset_pp.Count > 0)
+					preset.SetValue("", "PreprocessorDefinitions", preset_pp.Select(x => x.Key + "=" + x.Value).ToArray());
 				return;
 			}
-			preset.RemoveValue("", "PreprocessorDefinitions");
+			//preset.RemoveValue("", "PreprocessorDefinitions");
 		}
 
         /// <summary>
@@ -355,14 +356,15 @@ namespace PresetConverter
 		/// 只能用于预设模板拆分后的预设。
         /// </summary>
         /// <param name="preset">输入预设文件，原位操作。</param>
-        public void RemoveUnusedTechniques(ref IniFile preset)
+        public void RemoveUnusedTechniques(IniFile preset)
 		{
-			var techniques = new SortedSet<string>(this.techniques.Select(x => GetTechniqueFileName(x)).ToHashSet());
+			//var techniques = new SortedSet<string>(this.techniques.Select(x => GetTechniqueFileName(x)).ToHashSet());
 			var effects = preset.GetSections().Where(x => x != "").ToArray();
 
 			foreach (var effect in effects)
 			{
-				if (!techniques.Contains(effect))
+				var effectFile = effect.Split(new char[] { '|' }, 2, StringSplitOptions.None);
+				if (!techniqueFiles.Contains(effectFile[0]))
 				{
 					preset.RemoveSection(effect);
 				}
@@ -374,7 +376,7 @@ namespace PresetConverter
 		/// 只能用于预设模板拆分，且移动了预处理器定义的预设。
 		/// </summary>
 		/// <param name="preset"></param>
-		public void FixMultiLUT(ref IniFile preset, in int level)
+		public void FixMultiLUT(IniFile preset, in int level)
 		{
 			var featureLevel = 40900;
 			var mlut_pp = new SortedDictionary<string, string>();
@@ -430,6 +432,7 @@ namespace PresetConverter
 						mlut_pp.Add("fLUT_TextureName" + i, mlut_pp["fLUT_TextureName"]);
 					}
 				}
+				// Pass2、3写了文件名说明已经是三自定义版本了，无需额外操作
 			}
 
 			if (level == 0 || level == 1 && featureLevel > 50700)
@@ -439,7 +442,7 @@ namespace PresetConverter
 				preset.SetValue("MultiLUT.fx", "PreprocessorDefinitions", mlut_pp.Select(x => x.Key + "=" + x.Value).ToArray());
 				return;
 			}
-			
+			Console.WriteLine($"INFO|{preset.GetIniFileName()}似乎需要进行17/18行问题修复\n    |请注意该修复为推测性质，存在将正常预设修坏的可能");
 			// 17 -> 18 问题
 			foreach (var i in iterate)
 			{
@@ -455,6 +458,7 @@ namespace PresetConverter
 					var int_selector = int.Parse(selector[0]);
 					if (int_selector >= 14 && int_selector <= 16)
 					{
+						Console.WriteLine($"INFO|{preset.GetIniFileName()}的Pass{(i == "" ? "1" : i)}使用了ReShade MultiLUT\n    |因此升级到18行版本");
 						preset.SetValue("MultiLUT.fx", "fLUT_LutSelector" + i, new[] { (int_selector + 1).ToString() });
 					}
 				}
@@ -464,7 +468,8 @@ namespace PresetConverter
 					// 自定义了MultiLUT文件，但没填MultiLUT行数
 					if (mlut_pp.TryGetValue(multiLUTTexture_Source, out var mlut_tex) && mlut_tex.Length > 0 && !mlut_pp.ContainsKey("fLUT_LutAmount" + i))
 					{
-						mlut_pp.Add("fLUT_LutAmount" + i, "17");
+                        Console.WriteLine($"INFO|{preset.GetIniFileName()}的Pass{(i == "" ? "1" : i)}使用了自定义MultiLUT但忘记给出行数\n    |因此附加信息要求ReShade以17行读取");
+                        mlut_pp.Add("fLUT_LutAmount" + i, "17");
 					}
 				}
             }
@@ -487,8 +492,8 @@ namespace PresetConverter
 
 	public class PreprocessorList
 	{
-		public Dictionary<string, HashSet<string>> forwardList = new Dictionary<string, HashSet<string>> { };
-		public Dictionary<string, HashSet<string>> reverseList = new Dictionary<string, HashSet<string>> { };
+		public Dictionary<string, SortedSet<string>> forwardList = new Dictionary<string, SortedSet<string>> { };
+		public Dictionary<string, SortedSet<string>> reverseList = new Dictionary<string, SortedSet<string>> { };
 
         public PreprocessorList(IniFile preprocessorList)
 		{
@@ -496,10 +501,13 @@ namespace PresetConverter
 			foreach (var pair in effectPrepPair)
 			{
                 // Value: 宏 Key: 着色器
-                forwardList.Add(pair.Key, new HashSet<string>(pair.Value));
+                forwardList.Add(pair.Key, new SortedSet<string>(pair.Value));
 				foreach (var prep in pair.Value)
 				{
-					reverseList[prep].Add(pair.Key);
+					if (reverseList.ContainsKey(prep))
+						reverseList[prep].Add(pair.Key);
+					else
+						reverseList[prep] = new SortedSet<string> { pair.Key };
 				}
 			}
 		}
