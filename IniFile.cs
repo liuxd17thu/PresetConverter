@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -11,13 +11,15 @@ using System.Collections.ObjectModel;
 using System.Collections;
 using System.Runtime.InteropServices;
 using System.Net.Http.Headers;
+using System.Xml.XPath;
+using System.Net;
 
 namespace PresetConverter
 {
 	// Comes from Patrick Mours' ReShade Installer
 	public class IniFile
 	{
-		readonly string filePath;
+		public string filePath;
 
 		SortedDictionary<string, SortedDictionary<string, string[]>> sections =
 			new SortedDictionary<string, SortedDictionary<string, string[]>>();
@@ -69,6 +71,11 @@ namespace PresetConverter
 					}
 				}
 			}
+		}
+
+		public string GetIniFileName()
+		{
+			return Path.GetFileName(filePath);
 		}
 
 		public void SaveFile()
@@ -208,29 +215,34 @@ namespace PresetConverter
 
 	public class GShadePreset
 	{
-        string[] flairs;
-		string[] techniques;
-		readonly IniFile gshade_preset;
-		IniFile[] reshade_presets;
+        public string[] flairs;
+		public string[] techniques;
+		public HashSet<string> techniqueFiles;
+		public readonly IniFile gshade_preset;
+		public SortedDictionary<string, IniFile> reshade_presets = new SortedDictionary<string, IniFile>();
 
-        GShadePreset(IniFile gs_preset)
+        public GShadePreset(IniFile gs_preset)
 		{
 			gshade_preset = gs_preset;
 			gshade_preset.GetValue("", "Flairs", out flairs);
 			gshade_preset.GetValue("", "Techniques", out techniques);
+			techniqueFiles = techniques.Select(x => GetTechniqueFileName(x)).ToHashSet();
 		}
 
         /// <summary>
         /// 根据GShade预设及变体名解析相应变体的独立版预设。
+		/// 需要在移动预处理器定义之前使用。
         /// </summary>
         /// <param name="inFlair">变体名，空字符串对应解析本体。</param>
-        /// <returns></returns>
-        public IniFile ExtractFlair(string inFlair)
+        /// <returns>拆分后的预设文件。</returns>
+        public void ExtractFlair(string inFlair)
 		{
-			IniFile preset = null;
-			gshade_preset.GetSection("", out var headSectionData);
+			var preset = new IniFile(Path.Combine(".\\output", Path.GetFileNameWithoutExtension(gshade_preset.filePath) + (inFlair == "" ? "" : " - ") + inFlair + ".ini"));
+            Console.WriteLine($"INFO|提取预设模板：{preset.GetIniFileName()}");
+
+            gshade_preset.GetSection("", out var headSectionData);
 			preset.SetSection("", headSectionData);
-			foreach (var technique in techniques)
+			foreach (var technique in techniqueFiles)
 			{
 				var techFlair = inFlair.Length > 0 ? (GetTechniqueFileName(technique) + "|" + inFlair) : GetTechniqueFileName(technique);
 				SortedDictionary<string, string[]> sectionData;
@@ -269,7 +281,7 @@ namespace PresetConverter
                     preset.SetValue(technique, "PreprocessorDefinitions", pp);
                 }
             }
-			return preset;
+			reshade_presets.Add(inFlair, preset);
 		}
 
 		/// <summary>
@@ -281,40 +293,39 @@ namespace PresetConverter
 			preset.RemoveValue("", "TechniqueSorting");
 		}
 
-		/// <summary>
-		/// 移动预处理器定义至相应区段。
-		/// </summary>
-		/// <param name="preset">输入预设文件，原位操作。</param>
-		/// <param name="ppList">预处理器表以及对应的反查表。</param>
-		public void MovePreprocessors(ref IniFile preset, in PreprocessorList ppList)
+        /// <summary>
+        /// 移动预处理器定义至相应区段。
+        /// 只能用于预设模板拆分后的预设。
+        /// </summary>
+        /// <param name="preset">输入预设文件，原位操作。</param>
+        /// <param name="ppList">预处理器表以及对应的反查表。</param>
+        public void MovePreprocessors(ref IniFile preset, in PreprocessorList ppList)
 		{
 			// 具有自己section的着色器列表（可能多于Technique键值）
 			var effects = preset.GetSections().Where(x => x != "").ToArray();
-			// 预设预处理器列表
-			preset.GetValue("", "PreprocessorDefinitions", out var tmp);
-			var preset_pp = new SortedDictionary<string, string>(
-				tmp.Select(x =>
-				{	// 获取PreprocessorDefinition中所有的预处理器定义。
+
+            // 获取所有的预处理器定义。
+            Func<string [], Dictionary<string, string>> buildPair = delegate (string[] list)
+			{
+				return list.Select(x =>
+				{   
 					return x.Split(new char[] { '=' }, 2, StringSplitOptions.None);
 				}).Where(
 					x => x.Length == 2
-				).ToDictionary(x => x[0], x => x[1])
-			);
+				).ToDictionary(x => x[0], x => x[1]);
+            };
+			// preset section的预处理器定义
+            preset.GetValue("", "PreprocessorDefinitions", out var tmp);
+            var preset_pp = new SortedDictionary<string, string>(buildPair(tmp));
 
             foreach (var effect in effects)
 			{
 				if (!ppList.forwardList.ContainsKey(effect))
 					continue;
-				preset.GetValue(effect, "PreprocessorDefinitions", out tmp);
 
-				var section_pp = new SortedDictionary<string, string>(
-					tmp.Select(x =>
-					{	// 获取PreprocessorDefinition中所有的预处理器定义。
-						return x.Split(new char[] { '=' }, 2, StringSplitOptions.None);
-					}).Where(
-						x => x.Length == 2
-					).ToDictionary(x => x[0], x => x[1])
-				);
+				// effect section的预处理器定义
+				preset.GetValue(effect, "PreprocessorDefinitions", out tmp);
+				var section_pp = new SortedDictionary<string, string>(buildPair(tmp));
 
                 foreach (var pp in ppList.forwardList[effect])
 				{
@@ -328,9 +339,139 @@ namespace PresetConverter
 			}
 			if (preset_pp.Count > 0)
 			{
-				
+				foreach (var pp in preset_pp)
+				{
+                    Console.WriteLine($"WARN|{preset.GetIniFileName()}似乎未使用的预处理器定义：{pp.Key + "=" + pp.Value}");
+                }
+				Console.WriteLine("WARN|以上可能真的没有使用，也可能是本转换器的统计出现了遗漏，如真的是遗漏请向路障MKXX反馈");
+				preset.SetValue("", "PreprocessorDefinitions", preset_pp.Select(x => x.Key + "=" + x.Value).ToArray());
+				return;
+			}
+			preset.RemoveValue("", "PreprocessorDefinitions");
+		}
+
+        /// <summary>
+        /// 清理没有实际使用的效果器Section。
+		/// 只能用于预设模板拆分后的预设。
+        /// </summary>
+        /// <param name="preset">输入预设文件，原位操作。</param>
+        public void RemoveUnusedTechniques(ref IniFile preset)
+		{
+			var techniques = new SortedSet<string>(this.techniques.Select(x => GetTechniqueFileName(x)).ToHashSet());
+			var effects = preset.GetSections().Where(x => x != "").ToArray();
+
+			foreach (var effect in effects)
+			{
+				if (!techniques.Contains(effect))
+				{
+					preset.RemoveSection(effect);
+				}
 			}
 		}
+
+		/// <summary>
+		/// 修复MultiLUT.fx问题。
+		/// 只能用于预设模板拆分，且移动了预处理器定义的预设。
+		/// </summary>
+		/// <param name="preset"></param>
+		public void FixMultiLUT(ref IniFile preset, in int level)
+		{
+			var featureLevel = 40900;
+			var mlut_pp = new SortedDictionary<string, string>();
+            // 获取所有的预处理器定义
+            Func<string[], Dictionary<string, string>> buildPair = delegate (string[] list)
+            {
+                return list.Select(x =>
+                {
+                    return x.Split(new char[] { '=' }, 2, StringSplitOptions.None);
+                }).Where(
+                    x => x.Length == 2
+                ).ToDictionary(x => x[0], x => x[1]);
+            };
+
+            if (preset.GetValue("", "FeatureLevel", out var tmp))
+			{
+				featureLevel = tmp[0] != "" ? int.Parse(tmp[0]) : 40900;
+				featureLevel = Math.Max(40900, featureLevel);
+			}
+			if (!preset.GetValue("MultiLUT.fx", "PreprocessorDefinitions", out tmp))
+				return;
+            mlut_pp = new SortedDictionary<string, string>(buildPair(tmp));
+
+			var iterate = new string[] { "", "2", "3" };
+			
+			// 单自定义升级到三自定义
+			foreach (var i in iterate)
+			{
+				var multiLUTTexture = "MultiLUTTexture" + i;
+				var multiLUTTexture_Source = "MultiLUTTexture" + i + "_Source";
+				// MultiLUT的通道i是否启用？
+                if (!mlut_pp.ContainsKey(multiLUTTexture) || mlut_pp[multiLUTTexture] == "0")
+					continue;
+				// 启用的通道i是否要用自定义色条素材？
+				if (!mlut_pp.ContainsKey(multiLUTTexture_Source) || mlut_pp[multiLUTTexture_Source] != "1")
+					continue;
+				// 如果某个Pass的自定义LUT没写文件名
+				if (!mlut_pp.ContainsKey("fLUT_TextureName" + i))
+				{
+					var flag = false;
+					// 两种情况：Pass1用自定义LUT但是没写文件名，相当于用默认
+					// 或者旧版Pass2、3用公共自定义LUT，但是没写公共LUT文件名，也相当于默认
+					if (i == "" || !mlut_pp.ContainsKey("fLUT_TextureName"))
+					{
+						if (flag == false)
+							Console.WriteLine($"WARN|{preset.GetIniFileName()}使用了自定义LUT但并没有指定文件名，相当于使用ReShade MultiLUT，强行修复");
+						flag = true;
+						mlut_pp[multiLUTTexture_Source] = "2";
+					}
+					// 旧版Pass2、3用公共自定义LUT，转移文件名
+					else
+					{
+						mlut_pp.Add("fLUT_TextureName" + i, mlut_pp["fLUT_TextureName"]);
+					}
+				}
+			}
+
+			if (level == 0 || level == 1 && featureLevel > 50700)
+			{
+				if (level == 1)
+					Console.WriteLine($"INFO|{preset.GetIniFileName()}似乎是一个新版GS预设，跳过17/18行问题的修复");
+				preset.SetValue("MultiLUT.fx", "PreprocessorDefinitions", mlut_pp.Select(x => x.Key + "=" + x.Value).ToArray());
+				return;
+			}
+			
+			// 17 -> 18 问题
+			foreach (var i in iterate)
+			{
+                var multiLUTTexture = "MultiLUTTexture" + i;
+                var multiLUTTexture_Source = "MultiLUTTexture" + i + "_Source";
+                // MultiLUT的通道i是否启用？
+                if (!mlut_pp.ContainsKey(multiLUTTexture) || mlut_pp[multiLUTTexture] == "0")
+                    continue;
+				// MultiLUT_atlas4的17->18升级，以匹配更换后的图片
+				if (mlut_pp.TryGetValue(multiLUTTexture_Source, out var source) && source == "2")
+				{
+					preset.GetValue("MultiLUT.fx", "fLUT_LutSelector" + i, out var selector);
+					var int_selector = int.Parse(selector[0]);
+					if (int_selector >= 14 && int_selector <= 16)
+					{
+						preset.SetValue("MultiLUT.fx", "fLUT_LutSelector" + i, new[] { (int_selector + 1).ToString() });
+					}
+				}
+				// 自定义MultiLUT在没有说明行数的情况下，回退到以17读取，以和图片素材读取匹配
+				else if (mlut_pp.TryGetValue(multiLUTTexture_Source, out source) && source == "1")
+				{
+					// 自定义了MultiLUT文件，但没填MultiLUT行数
+					if (mlut_pp.TryGetValue(multiLUTTexture_Source, out var mlut_tex) && mlut_tex.Length > 0 && !mlut_pp.ContainsKey("fLUT_LutAmount" + i))
+					{
+						mlut_pp.Add("fLUT_LutAmount" + i, "17");
+					}
+				}
+            }
+
+            preset.SetValue("MultiLUT.fx", "PreprocessorDefinitions", mlut_pp.Select(x => x.Key + "=" + x.Value).ToArray());
+			return;
+        }
 
 		string GetTechniqueFileName(string techniqueSignature)
 		{
