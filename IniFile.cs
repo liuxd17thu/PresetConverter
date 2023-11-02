@@ -225,6 +225,8 @@ namespace PresetConverter
 		{
 			gshade_preset = gs_preset;
 			gshade_preset.GetValue("", "Flairs", out flairs);
+			if (flairs == null)
+				flairs = new string[] { };
 			gshade_preset.GetValue("", "Techniques", out techniques);
 			techniqueFiles = new SortedSet<string>(techniques.Select(x => GetTechniqueFileName(x)).ToHashSet());
 		}
@@ -315,7 +317,8 @@ namespace PresetConverter
 				).ToDictionary(x => x[0], x => x[1]);
             };
 			// preset section的预处理器定义
-            preset.GetValue("", "PreprocessorDefinitions", out var tmp);
+			if (!preset.GetValue("", "PreprocessorDefinitions", out var tmp))
+				return;
             var preset_pp = new SortedDictionary<string, string>(buildPair(tmp));
 
             foreach (var effect in effects)
@@ -478,6 +481,35 @@ namespace PresetConverter
 			return;
         }
 
+		public void FixBindings(IniFile preset, in PreprocessorList ppList)
+		{
+			var effects = preset.GetSections().Where(x => x != "").ToArray();
+			foreach (var effect in effects)
+			{
+				if (!ppList.bindList.ContainsKey(effect))
+					continue;
+				preset.GetSection(effect, out var sectionData);
+				if (!sectionData.ContainsKey("PreprocessorDefinitions") || sectionData["PreprocessorDefinitions"].Length == 0)
+					continue;
+
+                // <Preprocessor, UniformName>
+                var effect_binds = ppList.bindList[effect];
+				// <Preprocessor, Value>
+				var effect_pp = sectionData["PreprocessorDefinitions"].Select(x =>
+					x.Split(new[] { '=' }, 2, StringSplitOptions.None)
+				).Where(x => x.Length == 2).ToDictionary(x => x[0], x => x[1]);
+
+				// 遍历着色器Section下的所有预处理器
+				foreach (var pp in effect_pp)
+				{
+					if (!effect_binds.ContainsKey(pp.Key))
+						continue;
+					// 预处理器pp.Key有绑定，更新为 {effect_binds[pp.Key]}={pp.Value}
+					preset.SetValue(effect, effect_binds[pp.Key], pp.Value);
+				}
+			}
+        }
+
 		string GetTechniqueFileName(string techniqueSignature)
 		{
 			var index = techniqueSignature.IndexOf('@');
@@ -494,10 +526,11 @@ namespace PresetConverter
 	{
 		public Dictionary<string, SortedSet<string>> forwardList = new Dictionary<string, SortedSet<string>> { };
 		public Dictionary<string, SortedSet<string>> reverseList = new Dictionary<string, SortedSet<string>> { };
+		public Dictionary<string, Dictionary<string, string>> bindList = new Dictionary<string, Dictionary<string, string>> { };
 
         public PreprocessorList(IniFile preprocessorList)
 		{
-			preprocessorList.GetSection("", out var effectPrepPair);
+			preprocessorList.GetSection("Preprocessors", out var effectPrepPair);
 			foreach (var pair in effectPrepPair)
 			{
                 // Value: 宏 Key: 着色器
@@ -510,6 +543,17 @@ namespace PresetConverter
 						reverseList[prep] = new SortedSet<string> { pair.Key };
 				}
 			}
+			preprocessorList.GetSection("Bindings", out var effectBindPair);
+			if (effectBindPair == null)
+				return;
+			bindList = effectBindPair.Select(x =>
+			{
+				var y = x.Value.Where(z => z.Length > 0).Select(z =>
+				{
+					return z.Split(new[] { '=' }, 2, StringSplitOptions.None);
+				}).Where(z => z.Length == 2).ToDictionary(z => z[0], z => z[1]);
+				return new KeyValuePair<string, Dictionary<string, string>>(x.Key, y);
+			}).ToDictionary(x => x.Key, x => x.Value);
 		}
     }
 }

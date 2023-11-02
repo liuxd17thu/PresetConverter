@@ -17,6 +17,7 @@ namespace PresetConverter
 		static bool shouldClean { get; set; } = false;
 		static bool shouldMigrate { get; set; } = false;
 		static int shouldFixLUT { get; set; } = 0;
+		static bool shouldFixBinding{ get; set; } = false;
 		static readonly PreprocessorList ppList = new PreprocessorList(new IniFile(Assembly.GetExecutingAssembly().GetManifestResourceStream("PresetConverter.Resources.PreprocessorList.ini")));
 
 		static void Main(string[] args)
@@ -62,6 +63,7 @@ namespace PresetConverter
 					shouldClean = true;
 					shouldFixLUT = 1;
 					shouldMigrate = true;
+					shouldFixBinding = true;
 					break;
                 }
                 if (args[i] == "--clean" || args[i] == "--清理")
@@ -74,16 +76,21 @@ namespace PresetConverter
 					shouldMigrate = true;
 					i++; continue;
 				}
+				if (args[i] == "--bind" || args[i] == "--绑定")
+				{
+					shouldFixBinding = true;
+					i++; continue;
+				}
 				if (args[i] == "--mlut" || args[i] == "--MLUT")
 				{
 					shouldFixLUT = 2;
-					continue;
+					i++; continue;
 				}
 				if (args[i] == "--alut" || args[i] == "--自动LUT")
 				{
 					shouldFixLUT = 1;
-					continue;
-				}
+                    i++; continue;
+                }
 				if (args[i] == "--")
 				{
 					i++;
@@ -91,7 +98,7 @@ namespace PresetConverter
 						return false;
 					srcDirectory = args[i];
 					i++;
-					if (i >= args.Length || args[i] != ">")
+					if (i >= args.Length || args[i] != "-")
 						return false;
 					i++;
 					if (i >= args.Length)
@@ -132,6 +139,10 @@ namespace PresetConverter
 				{
 					source.FixMultiLUT(source.reshade_presets[flair], shouldFixLUT);
 				}
+				if (shouldFixBinding)
+				{
+					source.FixBindings(source.reshade_presets[flair], ppList);
+				}
                 source.reshade_presets[flair].filePath = Path.Combine(dstDirectory, source.reshade_presets[flair].filePath);
                 source.reshade_presets[flair].SaveFile();
 				if (!shouldMigrate)
@@ -169,9 +180,9 @@ namespace PresetConverter
 
 		static string helpInfo = @"常见用法示例：
 将旧版预设迁移到ReShade 5.8.0+并拆分，但不做额外修复。处理文件夹in中所有预设文件，并输出到文件夹out。
-    PresetConverter.exe --migrate -- .\in > .\out
+    PresetConverter.exe --migrate -- .\in - .\out
 将旧版预设迁移到ReShade 5.8.0+并拆分，清理着色器排序信息，修复MultiLUT编号问题：
-    PresetConverter.exe --migrate --clean --mlut -- .\in > .\out
+    PresetConverter.exe --migrate --clean --mlut -- .\in - .\out
 	
 参数说明：
     --version   --版本  显示程序版本信息。
@@ -194,13 +205,18 @@ namespace PresetConverter
 
     --alut      --ALUT  探测GS预设的FeatureLevel版本号，决定是否应用--mlut中的修复内容。
                         不保证对来自所有GShade版本的预设都能解析并正确转换。
-                        对于旧版ReShade预设，建议不使用--alut，而是分别尝试使用--mlut与否。
+                        对于旧ReShade预设、或是被新ReShade重新保存过的旧GShade预设，建议不使用--alut，
+                        而是分别尝试使用--mlut与否。
 
-    --all       --速通  包含--clean --migrate --alut三项操作，但不推荐起手就这么用。
+	--bind		--绑定  ui_bind语法会将uniform变量与预处理器绑定，此操作将以预处理器为准重设uniform值，
+                        解决MultiLUT等着色器中，界面上的选项表示与实际画面之间的对应错误。
+                        * 本操作依赖于手工统计的列表，如有绑定错误欢迎反馈。
 
-	-- [SRC] > [DST]    读取[SRC]目录下的所有预设文件（不递归），转换结果输出到[DST]目录。
+    --all       --速通  包含--clean --migrate --alut --bind四项操作，但不推荐起手就这么用。
+
+	-- [SRC] - [DST]    读取[SRC]目录下的所有预设文件（不递归），转换结果输出到[DST]目录。
                         自行替换[SRC]和[DST]路径，例如写“.\input”就是本程序所处位置旁边的input文件夹。
-						置于最后，不写的话默认使用input和output两个文件夹。
+						此参数需要置于最后，不写的话默认使用input和output两个文件夹。
 ";
 	}
 }
