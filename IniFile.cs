@@ -218,17 +218,75 @@ namespace PresetConverter
         public string[] flairs;
 		public string[] techniques;
 		public SortedSet<string> techniqueFiles;
-		public readonly IniFile gshade_preset;
+		public IniFile gshade_preset;
 		public SortedDictionary<string, IniFile> reshade_presets = new SortedDictionary<string, IniFile>();
+
+		public bool HasUnusedPreprocessor = false;
 
         public GShadePreset(IniFile gs_preset)
 		{
 			gshade_preset = gs_preset;
 			gshade_preset.GetValue("", "Flairs", out flairs);
-			if (flairs == null)
-				flairs = new string[] { };
 			gshade_preset.GetValue("", "Techniques", out techniques);
-			techniqueFiles = new SortedSet<string>(techniques.Select(x => GetTechniqueFileName(x)).ToHashSet());
+			if (flairs == null)
+				UpgradeClones();
+			else
+				CleanClones();
+            techniqueFiles = new SortedSet<string>(techniques.Select(x => GetTechniqueFileName(x)).ToHashSet());
+		}
+
+		private void UpgradeClones()
+		{
+			var new_flairs = new SortedSet<string>();
+			var new_techniques = new List<string>();
+			foreach (var technique in techniques)
+			{
+				var new_technique = technique;
+				if (technique.Contains("+"))
+				{
+					var x = technique.Split(new[] { '+' }, 2, StringSplitOptions.None);
+					if (x.Length == 2)
+						new_flairs.Add(x[1]);
+					new_technique = x[0];
+				}
+				if (!new_techniques.Contains(new_technique))
+					new_techniques.Add(new_technique);
+			}
+
+			flairs = new_flairs.ToArray();
+			techniques = new_techniques.ToArray();
+
+			if (flairs.Length > 0)
+			{
+				Console.WriteLine($"WARN|该预设包含GShade 3.x的着色器克隆语法，因此升级到后续的预设模板形式以供拆分");
+                gshade_preset.SetValue("", "Techniques", techniques);
+                gshade_preset.SetValue("", "Flairs", flairs.ToArray());
+            }
+
+			var effects = gshade_preset.GetSections().Where(x => x != "").ToArray();
+			foreach (var effect in effects)
+			{
+				var new_effect = effect.Replace('+', '|');
+				if (new_effect != effect)
+				{
+					gshade_preset.RenameSection(effect, new_effect);
+				}
+			}
+		}
+
+		private void CleanClones()
+		{
+			var new_techniques = techniques.Where(x => !x.Contains('+')).ToArray();
+
+			if (new_techniques.Length < techniques.Length)
+				Console.WriteLine($"WARN|该预设混杂了GShade 3.x的着色器克隆与4.x的预设模板，因此去除着色器克隆");
+
+			gshade_preset.SetValue("", "Techniques", new_techniques);
+
+			foreach (var effect in gshade_preset.GetSections().Where(x => x.Contains('+')))
+			{
+				gshade_preset.RemoveSection(effect);
+			}
 		}
 
         /// <summary>
@@ -283,6 +341,8 @@ namespace PresetConverter
                     preset.SetValue(technique, "PreprocessorDefinitions", pp);
                 }
             }
+			preset.RemoveValue("", "Flairs");
+			preset.SetValue("", "FeatureLevel", new string[] { "50800" });
 			reshade_presets.Add(inFlair, preset);
 		}
 
@@ -342,9 +402,12 @@ namespace PresetConverter
 			}
 			if (preset_pp.Count > 0)
 			{
-				foreach (var pp in preset_pp)
+				Console.WriteLine($"WARN|{preset.GetIniFileName()}似乎未使用的预处理器定义：");
+
+				HasUnusedPreprocessor = true;
+                foreach (var pp in preset_pp)
 				{
-                    Console.WriteLine($"WARN|{preset.GetIniFileName()}似乎未使用的预处理器定义：{pp.Key + "=" + pp.Value}");
+                    Console.WriteLine($"    |  {pp.Key + "=" + pp.Value}");
                 }
 
 				if(preset_pp.Count > 0)
@@ -378,7 +441,8 @@ namespace PresetConverter
 		/// 修复MultiLUT.fx问题。
 		/// 只能用于预设模板拆分，且移动了预处理器定义的预设。
 		/// </summary>
-		/// <param name="preset"></param>
+		/// <param name="preset">输入预设文件，原位操作。</param>
+		/// <param name="level">MultiLUT修复等级。</param>
 		public void FixMultiLUT(IniFile preset, in int level)
 		{
 			var featureLevel = 40900;
@@ -441,11 +505,11 @@ namespace PresetConverter
 			if (level == 0 || level == 1 && featureLevel > 50700)
 			{
 				if (level == 1)
-					Console.WriteLine($"INFO|{preset.GetIniFileName()}似乎是一个新版GS预设，跳过17/18行问题的修复");
+					//Console.WriteLine($"INFO|{preset.GetIniFileName()}似乎是一个新版GS预设，跳过17/18行问题的修复");
 				preset.SetValue("MultiLUT.fx", "PreprocessorDefinitions", mlut_pp.Select(x => x.Key + "=" + x.Value).ToArray());
 				return;
 			}
-			Console.WriteLine($"INFO|{preset.GetIniFileName()}似乎需要进行17/18行问题修复\n    |请注意该修复为推测性质，存在将正常预设修坏的可能");
+			//Console.WriteLine($"INFO|{preset.GetIniFileName()}似乎需要进行17/18行问题修复\n    |请注意该修复为推测性质，存在将正常预设修坏的可能");
 			// 17 -> 18 问题
 			foreach (var i in iterate)
 			{
@@ -481,7 +545,12 @@ namespace PresetConverter
 			return;
         }
 
-		public void FixBindings(IniFile preset, in PreprocessorList ppList)
+        /// <summary>
+        /// 为绑定的预处理器定义更新Uniform变量值
+        /// </summary>
+        /// <param name="preset">输入预设文件，原位操作。</param>
+        /// <param name="ppList">预处理器表以及对应的反查表。</param>
+        public void FixBindings(IniFile preset, in PreprocessorList ppList)
 		{
 			var effects = preset.GetSections().Where(x => x != "").ToArray();
 			foreach (var effect in effects)

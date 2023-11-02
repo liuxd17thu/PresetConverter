@@ -18,6 +18,7 @@ namespace PresetConverter
 		static bool shouldMigrate { get; set; } = false;
 		static int shouldFixLUT { get; set; } = 0;
 		static bool shouldFixBinding{ get; set; } = false;
+
 		static readonly PreprocessorList ppList = new PreprocessorList(new IniFile(Assembly.GetExecutingAssembly().GetManifestResourceStream("PresetConverter.Resources.PreprocessorList.ini")));
 
 		static void Main(string[] args)
@@ -28,13 +29,19 @@ namespace PresetConverter
 			Console.WriteLine(versionInfo);
 			if (ArgParser(args))
 			{
+				var config = "运行配置：\n" +
+								$"迁移：\t\t{(shouldMigrate ? "是" : "否")}\n" +
+								$"清理：\t\t{(shouldClean ? "是" : "否")}\n" +
+								$"MultiLUT：\t{(shouldFixLUT == 2 ? "强制" : (shouldFixLUT == 1 ? "猜测" : "不修复"))}\n" +
+								$"绑定：\t\t{(shouldFixBinding ? "刷新" : "不动")}\n";
+				Console.WriteLine(config);
 				ConvertAllPresets();
 				Console.WriteLine("转换结束，按回车键退出。");
                 Console.ReadLine();
             }
 			else
 			{
-				Console.WriteLine("未转换，自动退出。");
+				Console.WriteLine("未转换。按回车键退出。");
 				Console.ReadLine();
 			}
 		}
@@ -61,7 +68,7 @@ namespace PresetConverter
                 if (args[i] == "--all" || args[i] == "--速通")
                 {
 					shouldClean = true;
-					shouldFixLUT = 1;
+					shouldFixLUT = 2;
 					shouldMigrate = true;
 					shouldFixBinding = true;
 					break;
@@ -106,7 +113,7 @@ namespace PresetConverter
 					dstDirectory = args[i];
 					return true;
 				}
-				Console.WriteLine($"未知参数：{args[i]}");
+				Console.WriteLine($"ERR |未知参数：{args[i]}");
 				return false;
 			}
 			return true;
@@ -122,7 +129,7 @@ namespace PresetConverter
 			}
 			source.gshade_preset.filePath = GShadePresetPath;
 			var baseAndFlair = source.flairs.Prepend("");
-
+			Console.WriteLine("    |");
             foreach (var flair in baseAndFlair)
 			{
 				if (shouldMigrate)
@@ -148,7 +155,9 @@ namespace PresetConverter
 				if (!shouldMigrate)
 					return;
 			}
-		}
+            if (shouldMigrate && source.HasUnusedPreprocessor)
+                Console.WriteLine("INFO|“未使用的预处理器”可能真的没有使用，也可能是本转换器内置的统计出现了遗漏\nINFO|如真的是遗漏，请携带日志与问题预设向路障MKXX反馈");
+        }
 
 		static void ConvertAllPresets()
 		{
@@ -167,22 +176,23 @@ namespace PresetConverter
 			{
 				Console.WriteLine($"INFO|读取输入预设：{Path.GetFileName(GShadePresetPath)}");
 				ConvertPreset(GShadePresetPath);
-                Console.WriteLine("INFO|“未使用的预处理器”可能真的没有使用，也可能是本转换器内置的统计出现了遗漏\nINFO|如真的是遗漏，请携带日志与问题预设向路障MKXX反馈");
-                Console.WriteLine($"----|");
+                Console.WriteLine($"----|\n");
 			}
 		}
 
 		static string versionInfo =
 			"GShade -> ReShade预设转换器 | 作者：路障MKXX\n" +
-			"适合于将预设从低版本GShade迁移至高版本(5.8.0+)ReShade。\n" +
+			"适合于将预设从低版本GShade迁移至ReShade 5.8.0+。\n" +
 			$"版本：v{version}\n" +
-			"测试版本，如出现任何故障，请向微博 @路障MKXX 反馈。";
+			"测试版本，如出现任何故障，请向微博 @路障MKXX 反馈。\n";
 
 		static string helpInfo = @"常见用法示例：
 将旧版预设迁移到ReShade 5.8.0+并拆分，但不做额外修复。处理文件夹in中所有预设文件，并输出到文件夹out。
-    PresetConverter.exe --migrate -- .\in - .\out
-将旧版预设迁移到ReShade 5.8.0+并拆分，清理着色器排序信息，修复MultiLUT编号问题：
-    PresetConverter.exe --migrate --clean --mlut -- .\in - .\out
+    .\PresetConverter.exe --migrate -- .\in - .\out
+将旧版预设迁移到ReShade 5.8.0+并拆分，清理冗余信息，修复MultiLUT编号问题，刷新绑定，使用默认文件夹：
+    .\PresetConverter.exe --migrate --clean --mlut --bind
+    或者
+    .\PresetConverter.exe --all
 	
 参数说明：
     --version   --版本  显示程序版本信息。
@@ -208,15 +218,15 @@ namespace PresetConverter
                         对于旧ReShade预设、或是被新ReShade重新保存过的旧GShade预设，建议不使用--alut，
                         而是分别尝试使用--mlut与否。
 
-	--bind		--绑定  ui_bind语法会将uniform变量与预处理器绑定，此操作将以预处理器为准重设uniform值，
+    --bind      --绑定  ui_bind语法会将uniform变量与预处理器绑定，此操作将以预处理器为准重设uniform值，
                         解决MultiLUT等着色器中，界面上的选项表示与实际画面之间的对应错误。
                         * 本操作依赖于手工统计的列表，如有绑定错误欢迎反馈。
 
-    --all       --速通  包含--clean --migrate --alut --bind四项操作，但不推荐起手就这么用。
+    --all       --速通  包含--clean --migrate --mlut --bind四项操作，但不推荐起手就这么用。
 
-	-- [SRC] - [DST]    读取[SRC]目录下的所有预设文件（不递归），转换结果输出到[DST]目录。
+    -- [SRC] - [DST]    读取[SRC]目录下的所有预设文件（不递归），转换结果输出到[DST]目录。
                         自行替换[SRC]和[DST]路径，例如写“.\input”就是本程序所处位置旁边的input文件夹。
-						此参数需要置于最后，不写的话默认使用input和output两个文件夹。
+                        此参数需要置于最后，不写的话默认使用input和output两个文件夹。
 ";
 	}
 }
